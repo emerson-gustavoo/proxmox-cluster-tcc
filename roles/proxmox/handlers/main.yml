@@ -1,0 +1,11 @@
+---
+- name: reload network
+  # "ifup vmbr0" em vez de "ifreload -a": o ifup atua SO na interface
+  # nomeada, enquanto o ifreload reavalia a configuracao inteira. Como a
+  # interface de gerencia do no e gerenciada por netplan e sequer aparece
+  # no /etc/network/interfaces, reavaliar tudo nao traz beneficio e so
+  # amplia o que pode dar errado -- mesmo criterio aplicado ao host.
+  # O ifup do ifupdown2 e declarativo e idempotente: reexecutar numa
+  # interface ja configurada reaplica a config e retorna sucesso.
+  ansible.builtin.command: ifup vmbr0
+  changed_when: true

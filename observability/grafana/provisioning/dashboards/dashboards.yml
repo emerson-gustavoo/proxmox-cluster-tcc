@@ -1,0 +1,24 @@
+apiVersion: 1
+
+# Provisionamento de dashboards como codigo.
+#
+# Cobre duas lacunas do TCC1 de uma vez:
+#   - o Apendice C promete um dashboard de monitoramento e ate aqui so existiam
+#     consultas avulsas no Explore, que e ferramenta de investigacao;
+#   - a Secao 4.9 nao previa artefato algum para a observabilidade.
+#
+# Versionado no repositorio, atende tambem ao RNF02 e ao RNF06.
+
+providers:
+  - name: 'TCC'
+    orgId: 1
+    folder: 'TCC'
+    type: file
+    disableDeletion: false
+    # Recarrega a cada 30s: editar o JSON no disco atualiza o painel sem
+    # reiniciar o Grafana.
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

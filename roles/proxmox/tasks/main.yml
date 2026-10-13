@@ -1,0 +1,256 @@
+---
+# RF06: instalar e configurar o Proxmox VE nos nos provisionados.
+#
+# Segue a ordem oficial do wiki "Install Proxmox VE on Debian 12":
+#   repo -> full-upgrade -> kernel PVE -> REBOOT -> proxmox-ve
+#   -> remover kernel Debian -> update-grub -> remover os-prober
+#
+# A ordem importa: instalar proxmox-ve antes de bootar no kernel PVE
+# resulta em no sem KVM funcional.
+
+- name: Criar diretorio de keyrings do APT
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# O Apendice B do TCC1 adiciona o repositorio SEM a chave GPG -- nesse
+# formato o apt falha com NO_PUBKEY. Esta task e a correcao.
+- name: Baixar chave GPG do repositorio Proxmox VE
+  ansible.builtin.get_url:
+    url: "https://enterprise.proxmox.com/debian/proxmox-release-{{ pve_debian_release }}.gpg"
+    dest: "/etc/apt/keyrings/proxmox-release-{{ pve_debian_release }}.gpg"
+    owner: root
+    group: root
+    mode: "0644"
+  register: pve_key
+  retries: 3
+  delay: 10
+  until: pve_key is succeeded
+
+- name: Adicionar repositorio Proxmox VE
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [signed-by=/etc/apt/keyrings/proxmox-release-{{ pve_debian_release }}.gpg]
+      http://download.proxmox.com/debian/pve
+      {{ pve_debian_release }} {{ pve_repo_component }}
+    filename: pve-install-repo
+    state: present
+    update_cache: true
+
+- name: Desabilitar repositorio enterprise, se presente
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/pve-enterprise.list
+    state: absent
+
+- name: Atualizar o sistema (full-upgrade)
+  ansible.builtin.apt:
+    upgrade: full
+    update_cache: true
+  register: pve_upgrade
+  retries: 3
+  delay: 15
+  until: pve_upgrade is succeeded
+
+# ------------------------------------------------------------
+# Etapa 1: kernel do Proxmox + reboot
+# ------------------------------------------------------------
+- name: Instalar kernel do Proxmox VE
+  ansible.builtin.apt:
+    name: proxmox-default-kernel
+    state: present
+  register: pve_kernel
+
+- name: Reiniciar no kernel do Proxmox VE
+  ansible.builtin.reboot:
+    msg: "Reboot para o kernel Proxmox VE (Ansible)"
+    reboot_timeout: 600
+    post_reboot_delay: 15
+  when: pve_kernel is changed
+
+- name: Confirmar que o kernel ativo e o do Proxmox
+  ansible.builtin.command: uname -r
+  register: running_kernel
+  changed_when: false
+
+- name: Falhar se nao bootou no kernel PVE
+  ansible.builtin.assert:
+    that: "'pve' in running_kernel.stdout"
+    fail_msg: >-
+      Kernel ativo e '{{ running_kernel.stdout }}', esperado um kernel -pve.
+      Verifique a ordem de boot do GRUB no no.
+
+# Revalidacao APOS o reboot. A role common ja garantiu isto antes, mas o
+# cloud-init roda a cada boot e pode desfazer -- foi o que aconteceu na
+# primeira execucao, quando manage_etc_hosts restaurou "127.0.1.1 <host>"
+# e o pmxcfs se recusou a iniciar. Falhar aqui custa segundos; falhar
+# depois custa depurar o pvestatd dois degraus acima da causa.
+- name: Revalidar que o hostname resolve para IP nao-loopback apos o reboot
+  ansible.builtin.command: hostname --ip-address
+  register: host_ip_post
+  changed_when: false
+  failed_when: >
+    host_ip_post.rc != 0 or
+    host_ip_post.stdout is search('^127\\.')
+
+# ------------------------------------------------------------
+# Etapa 2: Proxmox VE
+# ------------------------------------------------------------
+# postfix e dependencia de proxmox-ve e abre dialogo interativo.
+# Preseed evita o play travar esperando input.
+- name: Preseed do postfix (sem configuracao de e-mail)
+  ansible.builtin.debconf:
+    name: postfix
+    question: "{{ item.q }}"
+    vtype: "{{ item.t }}"
+    value: "{{ item.v }}"
+  loop:
+    - { q: "postfix/main_mailer_type", t: "select", v: "Local only" }
+    - { q: "postfix/mailname", t: "string", v: "{{ inventory_hostname }}.{{ domain_name }}" }
+
+- name: Instalar Proxmox VE
+  ansible.builtin.apt:
+    name:
+      - proxmox-ve
+      - postfix
+      - open-iscsi
+    state: present
+    update_cache: true
+  register: pve_install
+  retries: 2
+  delay: 15
+  until: pve_install is succeeded
+
+# ------------------------------------------------------------
+# Etapa 3: limpeza
+# ------------------------------------------------------------
+- name: Remover kernel Debian e os-prober
+  ansible.builtin.apt:
+    name:
+      - linux-image-amd64
+      - os-prober
+    state: absent
+    purge: true
+  register: kernel_removed
+
+- name: Atualizar GRUB
+  ansible.builtin.command: update-grub
+  when: kernel_removed is changed
+  changed_when: true
+
+# Um laco unico sobre os quatro servicos era verificacao fraca demais: o
+# pve-cluster pode reportar "started" e cair em seguida, e a falha so
+# aparece no pvestatd -- que e o ultimo da fila e depende dos outros.
+# O pmxcfs e a base: sem ele o /etc/pve nao monta e nada mais funciona.
+- name: Limpar estado de falha dos servicos do Proxmox
+  ansible.builtin.command: systemctl reset-failed pve-cluster pvedaemon pveproxy pvestatd
+  changed_when: false
+  failed_when: false
+
+- name: Iniciar o pve-cluster (pmxcfs)
+  ansible.builtin.systemd:
+    name: pve-cluster
+    enabled: true
+    state: started
+
+# Prova real de que o pmxcfs subiu: ele monta /etc/pve e cria .version ali.
+# Sem esta espera, as tasks seguintes correm contra a inicializacao.
+- name: Aguardar o pmxcfs montar o /etc/pve
+  ansible.builtin.wait_for:
+    path: /etc/pve/.version
+    timeout: 60
+
+- name: Garantir demais servicos do Proxmox ativos
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - pvedaemon
+    - pveproxy
+    - pvestatd
+
+# RF06 -- evidencia de atendimento
+- name: Coletar versao do Proxmox VE
+  ansible.builtin.command: pveversion
+  register: pveversion_out
+  changed_when: false
+
+- name: Exibir versao instalada
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: {{ pveversion_out.stdout }}"
+
+# ------------------------------------------------------------
+# RF08 (parte 2): bridge vmbr0 para guests.
+#
+# Fica nesta role, e no fim dela, por dois motivos:
+#   1. depende do ifupdown2, que vem como dependencia do proxmox-ve --
+#      instalar a versao do Debian antes disso substitui o ifupdown e pode
+#      derrubar a rede pela qual o Ansible esta conectado;
+#   2. e configuracao especifica do Proxmox, nao configuracao base.
+#
+# Escrita em /etc/network/interfaces.d/ e NAO no /etc/network/interfaces,
+# para nao tocar na interface de gerencia entregue pelo MAAS. O Proxmox
+# espera ser dono do arquivo principal -- convivem, mas e um desvio a
+# declarar como limitacao no texto.
+# ------------------------------------------------------------
+# ------------------------------------------------------------
+# O ifupdown2 exige /run/network para o lock dele. Quem normalmente cria
+# esse diretorio no boot e o networking.service -- mas o no entregue pelo
+# MAAS tem a rede sob netplan/systemd-networkd, e o networking.service
+# nunca roda. Sem o diretorio, "ifreload -a" falha com
+#   "error: Another instance of this program is already running."
+# que e enganoso: nao ha instancia alguma em execucao.
+#
+# /run e tmpfs, entao o diretorio some a cada boot -- dai o tmpfiles.d.
+# ------------------------------------------------------------
+- name: Garantir o diretorio de estado do ifupdown2
+  ansible.builtin.file:
+    path: /run/network
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: configure_vmbr0 | bool
+
+- name: Recriar /run/network a cada boot
+  ansible.builtin.copy:
+    dest: /etc/tmpfiles.d/ifupdown2-network.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Gerenciado pelo Ansible (role proxmox).
+      # O ifupdown2 precisa deste diretorio; o networking.service nao roda
+      # neste no porque a rede e gerenciada por netplan/systemd-networkd.
+      d /run/network 0755 root root -
+  when: configure_vmbr0 | bool
+
+- name: Garantir inclusao de interfaces.d em /etc/network/interfaces
+  ansible.builtin.lineinfile:
+    path: /etc/network/interfaces
+    line: "source /etc/network/interfaces.d/*"
+    state: present
+  when: configure_vmbr0 | bool
+
+- name: Verificar se a NIC dedicada existe
+  ansible.builtin.assert:
+    that: vmbr0_uplink in ansible_facts.interfaces
+    fail_msg: >-
+      A interface '{{ vmbr0_uplink }}' nao existe em {{ inventory_hostname }}.
+      Adicione a segunda NIC na VM
+      (qm set <vmid> --net1 virtio,bridge=vmbr90)
+      ou defina configure_vmbr0: false em group_vars/all.yml.
+  when: configure_vmbr0 | bool
+
+- name: Configurar bridge vmbr0
+  ansible.builtin.template:
+    src: vmbr0.j2
+    dest: /etc/network/interfaces.d/vmbr0
+    owner: root
+    group: root
+    mode: "0644"
+  when: configure_vmbr0 | bool
+  notify: reload network

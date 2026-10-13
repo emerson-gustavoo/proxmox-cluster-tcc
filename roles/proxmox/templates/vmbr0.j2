@@ -1,0 +1,10 @@
+auto {{ vmbr0_uplink }}
+iface {{ vmbr0_uplink }} inet manual
+
+auto vmbr0
+iface vmbr0 inet manual
+    bridge-ports {{ vmbr0_uplink }}
+    bridge-stp off
+    bridge-fd 0
+    # Bridge de guests do Proxmox VE.
+    # Sem IP: a gerencia do no continua na interface entregue pelo MAAS.

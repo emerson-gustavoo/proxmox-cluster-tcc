@@ -1,0 +1,20 @@
+---
+# RF07 (parte 1): criar o cluster no no primario.
+
+- name: Criar cluster Proxmox VE
+  ansible.builtin.command:
+    cmd: "pvecm create {{ cluster_name }}"
+    creates: /etc/pve/corosync.conf
+  register: pvecm_create
+
+- name: Aguardar o primario ficar quorate
+  ansible.builtin.command: pvecm status
+  register: primary_status
+  changed_when: false
+  retries: 12
+  delay: 5
+  until: primary_status.stdout is search('Quorate:\s+Yes')
+
+- name: Confirmar cluster criado
+  ansible.builtin.debug:
+    msg: "Cluster '{{ cluster_name }}' ativo em {{ inventory_hostname }}"

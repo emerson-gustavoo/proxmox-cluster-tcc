@@ -1,0 +1,27 @@
+# Segredos -- RNF02 manda versionar os playbooks, nao as credenciais.
+# O TCC1 (Secao 4.9) diz que o repositorio e PUBLICO; sem este arquivo o
+# token do MAAS e a senha do Grafana vao para o GitHub.
+.env
+*.key
+*.pem
+secrets.yml
+vault-password*
+.maas-api-key
+
+# Ansible
+*.retry
+.ansible/
+fact_cache/
+
+# Artefatos de build da imagem MAAS
+*.tar.gz
+*.qcow2
+*.raw
+packer-maas/
+output-*/
+
+# Editor / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

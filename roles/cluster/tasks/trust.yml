@@ -1,0 +1,73 @@
+---
+# Pre-requisito de "pvecm add" que o TCC1 nao cobre.
+#
+# "pvecm add <primario> --use_ssh" roda NO NO QUE INGRESSA e abre SSH
+# como root PARA O PRIMARIO. O MAAS injeta apenas a chave do sysadmin nos
+# nos -- nao existe confianca root no-a-no. Sem as tasks abaixo o comando
+# pede senha interativamente e o play trava.
+#
+# Malha completa (todos confiam em todos) para que a role funcione tanto
+# na formacao inicial quanto na adicao de novos nos (RNF05).
+
+- name: Garantir /root/.ssh
+  ansible.builtin.file:
+    path: /root/.ssh
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Gerar par de chaves do root, se ainda nao existir
+  ansible.builtin.user:
+    name: root
+    generate_ssh_key: true
+    ssh_key_type: ed25519
+    ssh_key_file: .ssh/id_ed25519
+    ssh_key_comment: "root@{{ inventory_hostname }} (ansible/pvecm)"
+
+- name: Ler chave publica do root
+  ansible.builtin.slurp:
+    src: /root/.ssh/id_ed25519.pub
+  register: root_pub_raw
+
+- name: Registrar chave publica como fato
+  ansible.builtin.set_fact:
+    root_pubkey: "{{ root_pub_raw.content | b64decode | trim }}"
+
+- name: Autorizar as chaves de todos os nos (malha completa)
+  ansible.builtin.blockinfile:
+    path: /root/.ssh/authorized_keys
+    create: true
+    owner: root
+    group: root
+    mode: "0600"
+    marker: "# {mark} ANSIBLE - confianca de cluster {{ cluster_name }}"
+    block: |
+      {# A guarda "is defined" e obrigatoria. Se um no falhar numa role
+         anterior, o Ansible o remove dos plays seguintes e o fato root_pubkey
+         nunca e definido para ele -- sem a guarda, a falha de UM no novo
+         derruba a execucao sobre TODOS os nos ja em operacao.
+         Observado em 13/10/2026 ao integrar o pve04. Ver achado no 26. #}
+      {% for h in groups['proxmox_cluster'] if hostvars[h].root_pubkey is defined %}
+      {{ hostvars[h]['root_pubkey'] }}
+      {% endfor %}
+
+# Evita o prompt de "authenticity of host ... can't be established", que
+# tambem travaria o pvecm.
+- name: Configurar SSH do root para a rede de provisionamento
+  ansible.builtin.copy:
+    dest: /root/.ssh/config
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      Host {{ groups['proxmox_cluster'] | join(' ') }} 10.10.10.*
+          StrictHostKeyChecking accept-new
+          UserKnownHostsFile /root/.ssh/known_hosts
+
+- name: Testar SSH root do no para o primario
+  ansible.builtin.command: >-
+    ssh -o BatchMode=yes -o ConnectTimeout=10
+    root@{{ hostvars[cluster_primary]['ansible_host'] }} true
+  changed_when: false
+  when: inventory_hostname != cluster_primary

@@ -1,0 +1,133 @@
+---
+# RF08 (parte 1): DNS, NTP e os pre-requisitos de nome que a instalacao do
+# Proxmox VE exige.
+#
+# A bridge vmbr0 NAO fica aqui: ela depende do ifupdown2, que vem como
+# dependencia do proxmox-ve. Ver roles/proxmox/tasks/main.yml.
+
+- name: Instalar pacotes base
+  ansible.builtin.apt:
+    name:
+      - gnupg
+      - curl
+      - ca-certificates
+      - chrony
+      - debconf-utils      # exigido pelo modulo ansible.builtin.debconf
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  register: base_pkgs
+  retries: 3
+  delay: 10
+  until: base_pkgs is succeeded
+
+# ------------------------------------------------------------
+# Hostname e /etc/hosts
+#
+# CRITICO: a instalacao do pve-manager falha se o hostname do no nao
+# resolver para um IP real (nao-loopback). E renomear um no depois de
+# formar o cluster quebra o cluster -- por isso isto vem antes de tudo.
+# ------------------------------------------------------------
+- name: Definir hostname
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+
+# ------------------------------------------------------------
+# PRECISA vir ANTES de escrever /etc/hosts.
+#
+# A imagem implantada pelo MAAS traz cloud-init com manage_etc_hosts: true,
+# que REGENERA /etc/hosts a cada boot a partir do template dele --
+# restaurando "127.0.1.1 <host>" e desfazendo o que esta role escreveu.
+#
+# O efeito so aparece depois do reboot da role proxmox: o pmxcfs se recusa
+# a iniciar quando o hostname resolve para loopback, o /etc/pve nao monta,
+# e o pvestatd falha por nao achar a lista de acesso. A falha se manifesta
+# dois degraus acima da causa.
+# ------------------------------------------------------------
+- name: Impedir que o cloud-init reescreva /etc/hosts
+  ansible.builtin.copy:
+    dest: /etc/cloud/cloud.cfg.d/99-tcc-hosts.cfg
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Gerenciado pelo Ansible (role common).
+      # O Proxmox VE exige que o hostname resolva para IP nao-loopback.
+      manage_etc_hosts: false
+
+- name: Gerar /etc/hosts com FQDN de todos os nos
+  # O template omite 127.0.1.1 de proposito: esse mapeamento faz o
+  # hostname resolver para loopback e impede o pmxcfs de iniciar.
+  ansible.builtin.template:
+    src: hosts.j2
+    dest: /etc/hosts
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Validar que o hostname resolve para IP nao-loopback
+  ansible.builtin.command: hostname --ip-address
+  register: host_ip
+  changed_when: false
+  failed_when: >
+    host_ip.rc != 0 or
+    host_ip.stdout is search('^127\.')
+
+# ------------------------------------------------------------
+# DNS
+# ------------------------------------------------------------
+- name: Desabilitar systemd-resolved (conflita com resolv.conf estatico)
+  ansible.builtin.systemd:
+    name: systemd-resolved
+    enabled: false
+    state: stopped
+  failed_when: false
+
+- name: Inspecionar /etc/resolv.conf
+  ansible.builtin.stat:
+    path: /etc/resolv.conf
+  register: resolv_stat
+
+# Se resolv.conf for symlink para /run/systemd/resolve/*, o modulo template
+# escreve no ALVO do link -- arquivo que ninguem regenera depois de parar o
+# resolved. O no fica sem DNS. Removemos o link antes de escrever.
+- name: Remover symlink de resolv.conf
+  ansible.builtin.file:
+    path: /etc/resolv.conf
+    state: absent
+  when: resolv_stat.stat.islnk | default(false)
+
+- name: Configurar resolv.conf
+  ansible.builtin.template:
+    src: resolv.conf.j2
+    dest: /etc/resolv.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Validar resolucao de nomes
+  ansible.builtin.command: getent hosts download.proxmox.com
+  register: dns_check
+  changed_when: false
+  retries: 3
+  delay: 5
+  until: dns_check.rc == 0
+
+# ------------------------------------------------------------
+# NTP -- no Debian a unit e "chrony", NAO "chronyd" (chronyd e RHEL).
+# O Apendice B do TCC1 usa "chronyd" e falha aqui.
+# ------------------------------------------------------------
+- name: Configurar servidores NTP
+  ansible.builtin.template:
+    src: chrony.conf.j2
+    dest: /etc/chrony/chrony.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart chrony
+
+- name: Habilitar e iniciar chrony
+  ansible.builtin.systemd:
+    name: chrony
+    enabled: true
+    state: started

@@ -1,0 +1,25 @@
+---
+# Inventario do laboratorio TCC2.
+# Os IPs vem do "Static assign" configurado no MAAS antes do deploy
+# (Fase 6 do runbook), nao do range dinamico de DHCP.
+all:
+  children:
+    proxmox_cluster:
+      hosts:
+        pve01:
+          ansible_host: 10.10.10.11
+        pve02:
+          ansible_host: 10.10.10.12
+        pve03:
+          ansible_host: 10.10.10.13
+        # Acrescentado em 13/10/2026 para o teste do RNF05. Estas duas linhas
+        # sao a UNICA alteracao manual necessaria para integrar um no ao
+        # cluster -- ver EXECUCAO-TCC2.md, secao do RNF05.
+        pve04:
+          ansible_host: 10.10.10.14
+      vars:
+        # Usuario criado pelo cloud-init da imagem custom do MAAS.
+        # Confirme apos o primeiro deploy: nas imagens packer-maas de
+        # Debian normalmente e "debian"; em Ubuntu e "ubuntu".
+        ansible_user: debian
+        ansible_python_interpreter: /usr/bin/python3

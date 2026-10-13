@@ -1,0 +1,43 @@
+---
+# RNF03: ao final do processo o cluster deve estar formado, com todos os
+# nos no mesmo cluster e em quorum.
+#
+# Esta e a evidencia objetiva para o quadro de avaliacao do TCC2 --
+# roda em TODOS os nos, nao so no primario, porque quorum precisa ser
+# verdade do ponto de vista de cada membro.
+
+- name: Coletar status do cluster
+  ansible.builtin.command: pvecm status
+  register: cluster_status
+  changed_when: false
+
+- name: Coletar lista de nos
+  ansible.builtin.command: pvecm nodes
+  register: cluster_nodes
+  changed_when: false
+
+- name: Verificar quorum
+  ansible.builtin.assert:
+    that:
+      - cluster_status.stdout is search('Quorate:\s+Yes')
+    fail_msg: "{{ inventory_hostname }} NAO esta em quorum."
+    success_msg: "{{ inventory_hostname }}: quorum OK."
+
+- name: Verificar nome do cluster
+  ansible.builtin.assert:
+    that:
+      - cluster_status.stdout is search('Name:\s+' ~ cluster_name)
+    fail_msg: "{{ inventory_hostname }} pertence a outro cluster."
+
+- name: Verificar quantidade de membros
+  ansible.builtin.assert:
+    that:
+      - cluster_status.stdout is search('Nodes:\s+' ~ (groups['proxmox_cluster'] | length))
+    fail_msg: >-
+      Esperados {{ groups['proxmox_cluster'] | length }} membros.
+      Saida de pvecm nodes:
+      {{ cluster_nodes.stdout }}
+
+- name: Resumo (evidencia para o quadro de avaliacao)
+  ansible.builtin.debug:
+    msg: "{{ cluster_status.stdout_lines }}"

@@ -1,0 +1,11 @@
+{% for srv in ntp_servers %}
+server {{ srv }} iburst
+{% endfor %}
+
+driftfile /var/lib/chrony/chrony.drift
+makestep 1.0 3
+rtcsync
+logdir /var/log/chrony
+
+# Sincronia de tempo e pre-requisito do Corosync: deriva de relogio entre
+# os nos causa perda de quorum intermitente e dificil de diagnosticar.

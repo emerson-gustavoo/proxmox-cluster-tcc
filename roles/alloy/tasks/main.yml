@@ -1,0 +1,102 @@
+---
+# RF09: instalar e configurar o Grafana Alloy em cada no, enviando logs e
+# metricas a VM de observabilidade.
+#
+# Roda ANTES da role cluster (ver comentario em site.yml).
+#
+# O Apendice B do TCC1 faz "apt: name=alloy" direto -- o pacote nao existe
+# nos repositorios do Debian, e preciso o repositorio da Grafana. E o
+# apendice tambem nao escreve config nenhuma, ou seja, o agente subiria
+# sem saber para onde enviar. As duas coisas sao corrigidas aqui.
+
+- name: Baixar chave GPG do repositorio Grafana
+  ansible.builtin.get_url:
+    url: https://apt.grafana.com/gpg.key
+    dest: /etc/apt/keyrings/grafana.asc
+    owner: root
+    group: root
+    mode: "0644"
+  register: grafana_key
+  retries: 3
+  delay: 10
+  until: grafana_key is succeeded
+
+- name: Adicionar repositorio Grafana
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/grafana.asc] https://apt.grafana.com stable main"
+    filename: grafana
+    state: present
+    update_cache: true
+
+- name: Instalar Grafana Alloy
+  ansible.builtin.apt:
+    name: alloy
+    state: present
+  register: alloy_pkg
+  retries: 3
+  delay: 10
+  until: alloy_pkg is succeeded
+
+# Sem isto o Alloy nao le o journal e a coleta de logs fica vazia --
+# falha silenciosa: o servico sobe normalmente e nada chega no Loki.
+- name: Permitir que o usuario alloy leia o journald
+  ansible.builtin.user:
+    name: alloy
+    groups: adm,systemd-journal
+    append: true
+  notify: restart alloy
+
+- name: Configurar o Alloy
+  ansible.builtin.template:
+    src: config.alloy.j2
+    dest: /etc/alloy/config.alloy
+    owner: root
+    group: alloy
+    mode: "0640"
+    validate: "alloy fmt %s"
+  notify: restart alloy
+
+- name: Habilitar e iniciar o Alloy
+  ansible.builtin.systemd:
+    name: alloy
+    enabled: true
+    state: started
+
+- name: Aguardar o Alloy responder
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 12345
+    timeout: 60
+
+# RF09 -- evidencia de atendimento: confirma que o no alcanca os backends
+# ANTES de formar o cluster, quando ainda e facil corrigir.
+#
+# Checar a porta TCP NAO basta. Com a stack em contêiner, quem atende na
+# porta e o docker-proxy, que responde mesmo com o servico atras dele
+# ainda inicializando. Observado no laboratorio: as portas 3100 e 9009
+# aceitavam conexao enquanto o Loki respondia "Ingester not ready" e o
+# Mimir devolvia 503. O playbook teria seguido e o Alloy subiria sem
+# conseguir entregar nada -- exatamente a falha silenciosa que esta task
+# existe para evitar.
+#
+# Por isso consultamos os endpoints /ready de cada servico.
+- name: Validar que o Loki esta pronto
+  ansible.builtin.uri:
+    url: "http://{{ obs_host }}:3100/ready"
+    return_content: true
+    status_code: 200
+  register: loki_ready
+  retries: 6
+  delay: 10
+  until: loki_ready is succeeded and 'ready' in (loki_ready.content | default(''))
+  changed_when: false
+
+- name: Validar que o Mimir esta pronto
+  ansible.builtin.uri:
+    url: "http://{{ obs_host }}:9009/ready"
+    status_code: 200
+  register: mimir_ready
+  retries: 6
+  delay: 10
+  until: mimir_ready is succeeded
+  changed_when: false

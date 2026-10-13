@@ -1,0 +1,44 @@
+---
+# RF07 (parte 2): ingressar os demais nos.
+#
+# Este arquivo e executado por um play com serial: 1 -- ver site.yml.
+# NAO remover o serial: joins concorrentes corrompem a formacao do quorum.
+
+- name: Aguardar o primario responder
+  ansible.builtin.wait_for:
+    host: "{{ hostvars[cluster_primary]['ansible_host'] }}"
+    port: 8006
+    timeout: 120
+
+- name: Ingressar no cluster
+  ansible.builtin.command:
+    cmd: >-
+      pvecm add {{ hostvars[cluster_primary]['ansible_host'] }}
+      --use_ssh
+      --link0 {{ ansible_host }}
+    creates: /etc/pve/corosync.conf
+  # pvecm add reinicia pve-cluster e corosync; async evita falso timeout.
+  async: 300
+  poll: 10
+  register: pvecm_join
+
+- name: Aguardar reinicio do pve-cluster apos o join
+  ansible.builtin.systemd:
+    name: pve-cluster
+    state: started
+  register: pve_cluster_up
+  retries: 6
+  delay: 10
+  until: pve_cluster_up is succeeded
+
+- name: Aguardar este no entrar em quorum
+  ansible.builtin.command: pvecm status
+  register: join_status
+  changed_when: false
+  retries: 18
+  delay: 5
+  until: join_status.stdout is search('Quorate:\s+Yes')
+
+- name: Confirmar ingresso
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }} ingressou no cluster '{{ cluster_name }}'"

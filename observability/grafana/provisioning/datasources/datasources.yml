@@ -1,0 +1,25 @@
+apiVersion: 1
+
+# Os UIDs sao fixados de proposito. Sem eles o Grafana gera um UID aleatorio
+# a cada provisionamento, e o dashboard versionado nao teria como referenciar
+# as fontes de dados de forma estavel.
+
+datasources:
+  # Mimir expoe a API compativel com Prometheus em /prometheus
+  - name: Mimir
+    uid: mimir
+    type: prometheus
+    access: proxy
+    url: http://mimir:9009/prometheus
+    isDefault: true
+    jsonData:
+      timeInterval: 15s
+      httpMethod: POST
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      maxLines: 2000

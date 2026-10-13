@@ -1,0 +1,13 @@
+# Normaliza fim de linha. Sem isto, um clone feito no Windows pode gravar
+# CRLF nos scripts; ao serem executados no Linux, o bash falha com erros do
+# tipo "$'\r': command not found", e o Ansible rejeita templates Jinja.
+* text=auto eol=lf
+
+*.sh      text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.json    text eol=lf
+*.j2      text eol=lf
+*.cfg     text eol=lf
+*.alloy   text eol=lf
+*.example text eol=lf

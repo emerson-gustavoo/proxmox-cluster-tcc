@@ -1,0 +1,40 @@
+---
+# ============================================================
+# Variaveis compartilhadas por todos os nos do cluster.
+# Ajuste aqui, nao dentro das roles.
+# ============================================================
+
+# --- Identidade do cluster -----------------------------------
+cluster_name: cluster-tcc
+cluster_primary: pve01          # no que executa "pvecm create"
+
+# --- Rede de provisionamento ---------------------------------
+prov_subnet_cidr: 10.10.10.0/24
+prov_netmask: 255.255.255.0
+
+# Gateway dos nos = VM de controle fazendo NAT (ver control-vm/nat.sh).
+# A vmbr90 nao tem uplink fisico; o egresso e roteado pela VM de controle.
+prov_gateway: 10.10.10.2
+
+domain_name: lab.tcc
+dns_servers:
+  - 10.10.10.2                  # DNS do proprio MAAS
+ntp_servers:
+  - 10.10.10.2                  # chrony aponta para a VM de controle
+
+# --- Observabilidade -----------------------------------------
+obs_host: 10.10.10.3
+mimir_push_url: "http://{{ obs_host }}:9009/api/v1/push"
+loki_push_url: "http://{{ obs_host }}:3100/loki/api/v1/push"
+alloy_scrape_interval: 15s
+
+# --- Proxmox VE ----------------------------------------------
+# Debian 12 (bookworm) -> Proxmox VE 8.x
+pve_debian_release: bookworm
+pve_repo_component: pve-no-subscription
+
+# --- Bridge de guests (vmbr0) --------------------------------
+# Criada sobre uma NIC DEDICADA, nunca sobre a interface de gerencia.
+# Se as VMs dos nos tiverem apenas uma NIC, defina configure_vmbr0: false.
+configure_vmbr0: true
+vmbr0_uplink: ens19             # segunda NIC das VMs dos nos

@@ -1,0 +1,63 @@
+# Mimir em modo monolitico (single binary) -- laboratorio.
+multitenancy_enabled: false
+
+target: all
+
+server:
+  http_listen_port: 9009
+  grpc_listen_port: 9095
+  log_level: info
+
+common:
+  storage:
+    backend: filesystem
+    filesystem:
+      dir: /data/common
+
+blocks_storage:
+  backend: filesystem
+  filesystem:
+    dir: /data/blocks
+  bucket_store:
+    sync_dir: /data/tsdb-sync
+  tsdb:
+    dir: /data/tsdb
+
+ruler_storage:
+  backend: filesystem
+  filesystem:
+    dir: /data/ruler
+
+alertmanager_storage:
+  backend: filesystem
+  filesystem:
+    dir: /data/alertmanager
+
+compactor:
+  data_dir: /data/compactor
+
+ingester:
+  ring:
+    replication_factor: 1
+    kvstore:
+      store: memberlist
+
+store_gateway:
+  sharding_ring:
+    replication_factor: 1
+
+distributor:
+  ring:
+    kvstore:
+      store: memberlist
+
+memberlist:
+  join_members: []
+
+limits:
+  # Amostras chegam de 3 nos a cada 15s; limites default sao suficientes,
+  # mas out_of_order ajuda quando um no reinicia durante o provisionamento.
+  out_of_order_time_window: 10m
+
+activity_tracker:
+  filepath: /data/activity.log

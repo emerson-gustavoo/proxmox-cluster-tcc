@@ -1,0 +1,63 @@
+// ============================================================
+// Grafana Alloy -- no {{ inventory_hostname }} do cluster {{ cluster_name }}
+// Gerado pelo Ansible. Nao editar no no; editar o template.
+// ============================================================
+
+// ---------- METRICAS ----------------------------------------
+prometheus.exporter.unix "node" {
+  include_exporter_metrics = true
+}
+
+prometheus.scrape "node" {
+  targets         = prometheus.exporter.unix.node.targets
+  forward_to      = [prometheus.remote_write.mimir.receiver]
+  scrape_interval = "{{ alloy_scrape_interval }}"
+  job_name        = "node"
+}
+
+prometheus.remote_write "mimir" {
+  endpoint {
+    url = "{{ mimir_push_url }}"
+  }
+
+  external_labels = {
+    cluster = "{{ cluster_name }}",
+    node    = "{{ inventory_hostname }}",
+  }
+}
+
+// ---------- LOGS --------------------------------------------
+// Le o journald, que e onde o Proxmox escreve pve-cluster, corosync,
+// pvedaemon e pveproxy. E exatamente por isso que esta role roda antes
+// da formacao do cluster: falha de quorum no "pvecm" aparece aqui.
+loki.relabel "journal" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+}
+
+loki.source.journal "journal" {
+  forward_to    = [loki.write.loki.receiver]
+  relabel_rules = loki.relabel.journal.rules
+  max_age       = "12h"
+
+  labels = {
+    job     = "systemd-journal",
+    cluster = "{{ cluster_name }}",
+    node    = "{{ inventory_hostname }}",
+  }
+}
+
+loki.write "loki" {
+  endpoint {
+    url = "{{ loki_push_url }}"
+  }
+}

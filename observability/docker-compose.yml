@@ -1,0 +1,59 @@
+# Stack de observabilidade -- VM 9002 (10.10.10.3)
+#
+# Este diretorio cobre uma lacuna do TCC1: a Figura 3 mostra o Ansible
+# configurando a stack de observabilidade, mas a Secao 4.9 nao prevê
+# nenhum artefato para ela e nao existe RF correspondente. Acrescentar
+# ao texto do TCC2.
+#
+# NOTA sobre o "receptor Alloy" do Quadro 3 / Secao 4.1: nesta
+# implementacao os nos escrevem DIRETO no Loki e no Mimir, que sao os
+# receptores nativos. Nao existe funcao para um Alloy nesta VM. Remover
+# do Quadro 3 ou justificar tecnicamente -- hoje esta sem justificativa.
+#
+# Se algum "docker pull" falhar, confira a tag no Docker Hub e ajuste.
+
+services:
+  loki:
+    image: grafana/loki:3.4.2
+    container_name: loki
+    command: -config.file=/etc/loki/loki-config.yaml
+    ports:
+      # Exposto SO na rede de provisionamento, nao na rede da empresa.
+      - "10.10.10.3:3100:3100"
+    volumes:
+      - ./loki/loki-config.yaml:/etc/loki/loki-config.yaml:ro
+      - loki-data:/loki
+    restart: unless-stopped
+
+  mimir:
+    image: grafana/mimir:2.15.0
+    container_name: mimir
+    command: -config.file=/etc/mimir/mimir-config.yaml
+    ports:
+      - "10.10.10.3:9009:9009"
+    volumes:
+      - ./mimir/mimir-config.yaml:/etc/mimir/mimir-config.yaml:ro
+      - mimir-data:/data
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    container_name: grafana
+    ports:
+      # Este sim fica acessivel da rede da empresa, e onde tu abre o navegador.
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?defina em .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - loki
+      - mimir
+    restart: unless-stopped
+
+volumes:
+  loki-data:
+  mimir-data:
+  grafana-data:

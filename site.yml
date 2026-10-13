@@ -1,0 +1,81 @@
+---
+# ============================================================
+# Playbook principal.
+#
+# ORDEM DOS PLAYS -- atencao ao escrever o TCC2:
+#   common -> proxmox -> alloy -> cluster
+#
+# O Alloy entra ANTES da formacao do cluster, conforme a Secao 4.7
+# (Figura 6) do TCC1: a coleta de logs e metricas precisa estar ativa
+# durante o "pvecm", que e a etapa mais fragil do pipeline.
+#
+# A Secao 4.9 do TCC1 lista as roles como
+# "common, proxmox, cluster, alloy" -- ordem invertida e incorreta.
+# Corrigir o texto da 4.9 para bater com esta ordem.
+# ============================================================
+
+- name: "1/5 - Configuracao base (hostname, hosts, DNS, NTP)"
+  hosts: proxmox_cluster
+  become: true
+  roles:
+    - common
+
+- name: "2/5 - Instalacao do Proxmox VE"
+  hosts: proxmox_cluster
+  become: true
+  roles:
+    - proxmox
+
+- name: "3/5 - Agente Grafana Alloy (antes do cluster, de proposito)"
+  hosts: proxmox_cluster
+  become: true
+  roles:
+    - alloy
+
+- name: "4/5 - Confianca SSH root entre nos (pre-requisito do pvecm)"
+  hosts: proxmox_cluster
+  become: true
+  tasks:
+    - import_role:
+        name: cluster
+        tasks_from: trust
+
+# NAO usar "hosts: {{ cluster_primary }}". O campo hosts: e avaliado ANTES
+# de o Ansible carregar as group_vars -- ele precisa resolver quais maquinas
+# entram no play para so entao saber quais variaveis se aplicam. Uma
+# variavel de group_vars ali resulta em "'cluster_primary' is undefined".
+#
+# A alternativa seria criar grupos no inventario, mas isso obrigaria a
+# editar o inventario em dois lugares ao adicionar um no -- e o RNF05
+# promete que basta acrescentar o no. Entao o play roda sobre todos e a
+# condicao decide, ja dentro das tasks, onde as variaveis existem.
+- name: "5a/5 - Criar cluster no no primario"
+  hosts: proxmox_cluster
+  become: true
+  tasks:
+    - import_role:
+        name: cluster
+        tasks_from: create
+      when: inventory_hostname == cluster_primary
+
+- name: "5b/5 - Ingressar demais nos (UM POR VEZ)"
+  # serial: 1 e obrigatorio. Dois "pvecm add" simultaneos contra o mesmo
+  # cluster e modo de falha conhecido do Corosync.
+  # Com serial: 1 o play processa um no por vez; o primario e pulado pela
+  # condicao e os demais ingressam em sequencia.
+  hosts: proxmox_cluster
+  become: true
+  serial: 1
+  tasks:
+    - import_role:
+        name: cluster
+        tasks_from: join
+      when: inventory_hostname != cluster_primary
+
+- name: "Verificacao final do quorum"
+  hosts: proxmox_cluster
+  become: true
+  tasks:
+    - import_role:
+        name: cluster
+        tasks_from: verify

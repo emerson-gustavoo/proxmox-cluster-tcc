@@ -254,3 +254,21 @@
     mode: "0644"
   when: configure_vmbr0 | bool
   notify: reload network
+
+# O handler acima so dispara quando o template MUDA. Isso nao basta: se o
+# handler falhar, ou se a bridge desaparecer por fora do Ansible (reboot sem a
+# diretiva "source" no /etc/network/interfaces, por exemplo), as execucoes
+# seguintes devolvem changed=0 e a interface nunca sobe. O playbook estaria
+# convergindo o ARQUIVO e nao o ESTADO.
+#
+# Observado em 15/10/2026: os quatro nos tinham o arquivo e a diretiva source
+# identicos, e a vmbr0 existia em apenas um deles. Ver achado no 28.
+#
+# "creates" aponta para /sys/class/net/vmbr0, que existe enquanto a bridge
+# existir. A task roda quando a bridge esta ausente e e pulada quando esta
+# presente: idempotencia por condicao de estado, nao por mudanca de arquivo.
+- name: Garantir que a bridge vmbr0 esteja ativa
+  ansible.builtin.command: ifup vmbr0
+  args:
+    creates: /sys/class/net/vmbr0
+  when: configure_vmbr0 | bool

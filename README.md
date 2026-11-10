@@ -65,7 +65,8 @@ proxmox-cluster-tcc/
 │   └── cluster/                 # trust → create → join (serial) → verify
 ├── maas/
 │   ├── bootstrap.sh             # subnet, DHCP, gateway, imagem custom
-│   └── set-power.sh             # power driver proxmox por nó
+│   ├── set-power.sh             # power driver proxmox por nó
+│   └── curtin_userdata_custom_amd64   # preseed do curtin para a imagem Debian
 ├── control-vm/nat.sh            # egresso da rede isolada
 └── observability/               # Loki + Mimir + Grafana (compose + provisionamento)
 ```
@@ -77,6 +78,11 @@ proxmox-cluster-tcc/
 ```bash
 # 1. Na VM de controle, depois de "maas init" e do "maas login"
 sudo bash control-vm/nat.sh
+
+# O preseed do curtin precisa estar no lugar antes de importar a imagem
+# Debian customizada; sem ele o sistema instalado sai com falhas de configuração.
+sudo cp maas/curtin_userdata_custom_amd64 /var/snap/maas/current/preseeds/
+
 sudo bash maas/bootstrap.sh
 
 # 2. Ligue as VMs dos nós e espere o enlistment (estado New), então:
